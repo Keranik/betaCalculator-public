@@ -7,6 +7,7 @@ import {
   getOutgoers,
   getConnectedEdges
 } from 'reactflow';
+import CalculationEngine from '../utils/calculationEngine';
 
 const useFlowStore = create((set, get) => ({
   // React Flow state
@@ -25,6 +26,10 @@ const useFlowStore = create((set, get) => ({
   // Calculation state
   isCalculating: false,
   calculationResults: null,
+  validationIssues: [],
+  
+  // Calculation engine
+  calculationEngine: new CalculationEngine(),
   
   // Actions
   setNodes: (nodes) => set({ nodes }),
@@ -97,17 +102,89 @@ const useFlowStore = create((set, get) => ({
   
   setPrecision: (precision) => set({ precision }),
   
-  // Calculation functions
+  // Enhanced calculation functions
   calculateRates: () => {
-    const { nodes, edges } = get();
+    const { nodes, edges, calculationEngine, units } = get();
     set({ isCalculating: true });
     
     try {
-      // Basic calculation - traverse graph and compute rates
-      const results = performBasicCalculation(nodes, edges);
-      set({ calculationResults: results });
+      // Update the calculation engine with current graph
+      calculationEngine.updateGraph(nodes, edges);
+      
+      // Validate the production chain
+      const validationIssues = calculationEngine.validateChain();
+      
+      // Perform basic rate calculations
+      const basicResults = calculationEngine.calculateBasicRates(units);
+      
+      // Enhance results with validation info
+      const results = {
+        ...basicResults,
+        validationIssues,
+        hasIssues: validationIssues.length > 0
+      };
+      
+      set({ 
+        calculationResults: results,
+        validationIssues
+      });
     } catch (error) {
       console.error('Calculation error:', error);
+      set({ 
+        calculationResults: null,
+        validationIssues: [{
+          type: 'calculation_error',
+          message: error.message
+        }]
+      });
+    } finally {
+      set({ isCalculating: false });
+    }
+  },
+  
+  // Advanced optimization
+  optimizeProduction: (objective, constraints = {}) => {
+    const { nodes, edges, calculationEngine } = get();
+    set({ isCalculating: true });
+    
+    try {
+      calculationEngine.updateGraph(nodes, edges);
+      const optimizationResult = calculationEngine.optimizeProduction(objective, constraints);
+      
+      if (optimizationResult && optimizationResult.feasible) {
+        // Apply optimization results to nodes
+        const updatedNodes = get().nodes.map(node => {
+          const allocation = optimizationResult.machineAllocations[node.id];
+          if (allocation !== undefined) {
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                machineCount: Math.max(1, Math.round(allocation))
+              }
+            };
+          }
+          return node;
+        });
+        
+        set({ 
+          nodes: updatedNodes,
+          calculationResults: {
+            ...optimizationResult,
+            optimized: true
+          }
+        });
+      } else {
+        throw new Error('Optimization failed: No feasible solution found');
+      }
+    } catch (error) {
+      console.error('Optimization error:', error);
+      set({
+        validationIssues: [{
+          type: 'optimization_error',
+          message: error.message
+        }]
+      });
     } finally {
       set({ isCalculating: false });
     }
@@ -119,7 +196,8 @@ const useFlowStore = create((set, get) => ({
       nodes: [],
       edges: [],
       selectedNode: null,
-      calculationResults: null
+      calculationResults: null,
+      validationIssues: []
     });
   },
   
@@ -132,32 +210,22 @@ const useFlowStore = create((set, get) => ({
   importLayout: (layoutJson) => {
     try {
       const { nodes, edges } = JSON.parse(layoutJson);
-      set({ nodes, edges });
+      set({ 
+        nodes, 
+        edges,
+        calculationResults: null,
+        validationIssues: []
+      });
     } catch (error) {
       console.error('Import error:', error);
+      set({
+        validationIssues: [{
+          type: 'import_error',
+          message: error.message
+        }]
+      });
     }
   }
 }));
-
-// Basic calculation function (placeholder for now)
-function performBasicCalculation(nodes, edges) {
-  // This will be expanded to handle the actual production calculations
-  const results = {
-    totalPower: 0,
-    machineCount: nodes.length,
-    items: {}
-  };
-  
-  nodes.forEach(node => {
-    if (node.data.electricityConsumed) {
-      results.totalPower += node.data.electricityConsumed * (node.data.machineCount || 1);
-    }
-    if (node.data.electricityGenerated) {
-      results.totalPower -= node.data.electricityGenerated * (node.data.machineCount || 1);
-    }
-  });
-  
-  return results;
-}
 
 export default useFlowStore;
